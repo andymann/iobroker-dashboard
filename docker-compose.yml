@@ -1,8 +1,6 @@
 services:
   iobroker-dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: python:3.12-alpine
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -11,3 +9,6 @@ services:
       IOBROKER_STATES: "zigbee.0.44e2f8fffe61d5d9.state,zigbee.0.44e2f8fffe61d5d9.colortemp,zigbee.0.8c65a3fffef115e2.state"
       LISTEN_PORT:     "8080"
       FETCH_TIMEOUT:   "5"
+    volumes:
+      - ./iobroker_server.py:/app/iobroker_server.py:ro
+    command: python3 /app/iobroker_server.py
