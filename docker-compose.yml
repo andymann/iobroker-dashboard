@@ -11,4 +11,5 @@ services:
       FETCH_TIMEOUT:   "5"
     volumes:
       - ./iobroker_server.py:/app/iobroker_server.py:ro
-    command: python3 /app/iobroker_server.py
+    working_dir: /app
+    entrypoint: ["python3", "iobroker_server.py"]
