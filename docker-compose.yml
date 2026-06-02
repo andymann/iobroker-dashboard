@@ -1,6 +1,6 @@
 services:
   iobroker-dashboard:
-    image: ghcr.io/GITHUB_USER/GITHUB_REPO:latest
+    image: ghcr.io/andymann/iobroker-dashboard:latest
     restart: unless-stopped
     ports:
       - "8080:8080"
