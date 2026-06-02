@@ -10,4 +10,10 @@ zigbee.0.8c65a3fffef115e2.colortemp
  #Bad
  zigbee.0.001788010c5a5991.state
  zigbee.0.001788010c5a5991.color
+
+ # Kueche Tresen
+ zigbee.0.84ba20fffef7f63b.state
+ zigbee.0.9035eafffe9b6358.state
+ zigbee.0.9035eafffea3d2ae.state
+ zigbee.0.9035eafffe82fc70.state
  
