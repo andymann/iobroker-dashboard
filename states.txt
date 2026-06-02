@@ -1,19 +1,21 @@
+States · TXT
 # ioBroker state IDs to display on the dashboard.
-# One ID per line. Lines starting with # are comments. Blank lines are ignored.
-
-# Flur unten
+# Lines starting with # are comments. Blank lines are ignored.
+# Use [Group Name] to start a named row — all IDs below it appear in one horizontal row.
+# IDs without a group header are grouped by their parent device ID as before.
+ 
+[Flur unten]
 zigbee.0.44e2f8fffe61d5d9.state
 zigbee.0.44e2f8fffe61d5d9.colortemp
 zigbee.0.8c65a3fffef115e2.state
 zigbee.0.8c65a3fffef115e2.colortemp
 
- #Bad
+[Bad]
  zigbee.0.001788010c5a5991.state
  zigbee.0.001788010c5a5991.color
 
- # Kueche Tresen
+ [Kueche Tresen]
  zigbee.0.84ba20fffef7f63b.state
  zigbee.0.9035eafffe9b6358.state
  zigbee.0.9035eafffea3d2ae.state
  zigbee.0.9035eafffe82fc70.state
- 

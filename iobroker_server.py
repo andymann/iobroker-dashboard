@@ -2,7 +2,8 @@
 """
 ioBroker dashboard web server
 Configure via environment variables:
-  IOBROKER_HOST, IOBROKER_STATES, LISTEN_PORT, FETCH_TIMEOUT
+  IOBROKER_HOST, LISTEN_PORT, FETCH_TIMEOUT
+States and layout configured via /config/states.txt
 """
 
 import urllib.request
@@ -10,33 +11,60 @@ import urllib.parse
 import json
 import datetime
 import os
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 IOBROKER_HOST = os.environ.get("IOBROKER_HOST", "http://192.168.178.53:8087").rstrip("/")
-
-STATES_FILE = os.environ.get("STATES_FILE", "/config/states.txt")
-
-def load_states():
-    try:
-        with open(STATES_FILE) as f:
-            return [
-                line.strip() for line in f
-                if line.strip() and not line.strip().startswith("#")
-            ]
-    except FileNotFoundError:
-        print(f"WARNING: {STATES_FILE} not found, using defaults", flush=True)
-        return [
-            "zigbee.0.44e2f8fffe61d5d9.state",
-            "zigbee.0.44e2f8fffe61d5d9.colortemp",
-            "zigbee.0.8c65a3fffef115e2.state",
-        ]
-
-STATES = load_states()
-
 LISTEN_PORT   = int(os.environ.get("LISTEN_PORT",   "8080"))
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "5"))
+STATES_FILE   = os.environ.get("STATES_FILE", "/config/states.txt")
+
+# ── states.txt parser ─────────────────────────────────────────────────────────
+# Returns a list of groups: [{"label": str, "ids": [str, ...]}, ...]
+# Lines starting with # or blank are ignored.
+# [Group Name] starts a new group. IDs without a preceding group header
+# are auto-grouped by their parent device ID.
+
+def load_groups():
+    try:
+        with open(STATES_FILE) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        print(f"WARNING: {STATES_FILE} not found, using defaults", flush=True)
+        lines = [
+            "[Default]\n",
+            "zigbee.0.44e2f8fffe61d5d9.state\n",
+            "zigbee.0.44e2f8fffe61d5d9.colortemp\n",
+        ]
+
+    groups = []
+    current_label = None
+    current_ids   = []
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r'^\[(.+)\]$', line)
+        if m:
+            # Save previous group
+            if current_ids:
+                groups.append({"label": current_label, "ids": current_ids})
+            current_label = m.group(1).strip()
+            current_ids   = []
+        else:
+            # It's a state ID
+            if current_label is None:
+                # No header yet — use parent device ID as label
+                current_label = ".".join(line.split(".")[:-1]) or line
+            current_ids.append(line)
+
+    if current_ids:
+        groups.append({"label": current_label, "ids": current_ids})
+
+    return groups
 
 # ── ioBroker fetch ────────────────────────────────────────────────────────────
 
@@ -65,27 +93,15 @@ def extract_val(data):
         except: return (t if t else None), None
     if not isinstance(data, dict):
         return None, None
-
-    # Unwrap single-key wrapper: {"zigbee.0.xxx": {...}}
-    if len(data) == 1 and not any(k in data for k in ("val", "value", "type", "common", "_id")):
+    if len(data) == 1 and not any(k in data for k in ("val","value","type","common","_id")):
         data = next(iter(data.values()))
         if not isinstance(data, dict):
             return None, None
-
-    # Flat /get/ response: has "val" at top level alongside "type","common","_id"
-    if "val" in data:
-        return data["val"], data.get("ts") or data.get("lc")
-
-    # v1/state response: {"value": ..., "ts": ...}
-    if "value" in data:
-        return data["value"], data.get("ts") or data.get("lc")
-
-    # Nested: {"state": {"val": ...}}
+    if "val"   in data: return data["val"],   data.get("ts") or data.get("lc")
+    if "value" in data: return data["value"], data.get("ts") or data.get("lc")
     if "state" in data and isinstance(data["state"], dict) and "val" in data["state"]:
         return data["state"]["val"], data["state"].get("ts")
-
     return None, None
-
 
 def resolve_name(data):
     if not isinstance(data, dict):
@@ -95,12 +111,10 @@ def resolve_name(data):
         if isinstance(inner, dict):
             data = inner
     n = (data.get("common") or {}).get("name")
-    if not n:
-        return None
+    if not n: return None
     if isinstance(n, str):  return n.strip() or None
     if isinstance(n, dict): return n.get("en") or n.get("de") or next(iter(n.values()), None)
     return None
-
 
 def resolve_unit(data):
     if not isinstance(data, dict):
@@ -111,48 +125,28 @@ def resolve_unit(data):
             data = inner
     return (data.get("common") or {}).get("unit", "") or ""
 
+def fetch_state(state_id):
+    enc = urllib.parse.quote(state_id, safe="")
+    raw = None
+    for url in [
+        f"{IOBROKER_HOST}/get/{enc}",
+        f"{IOBROKER_HOST}/v1/state/{enc}",
+        f"{IOBROKER_HOST}/getPlainValue/{enc}",
+    ]:
+        raw = iob_fetch(url)
+        if raw is not None:
+            break
+    val, _  = extract_val(raw)
+    label   = (resolve_name(raw) if isinstance(raw, dict) else None) or state_id.split(".")[-1]
+    unit    =  resolve_unit(raw) if isinstance(raw, dict) else ""
+    return {"id": state_id, "val": val, "label": label, "unit": unit}
 
-def parent_id(sid):
-    parts = sid.split(".")
-    return ".".join(parts[:-1]) if len(parts) > 1 else sid
-
-
-def fetch_all():
-    tiles, dev_cache = [], {}
-
-    for state_id in STATES:
-        enc = urllib.parse.quote(state_id, safe="")
-        raw = None
-        for url in [
-            f"{IOBROKER_HOST}/get/{enc}",
-            f"{IOBROKER_HOST}/v1/state/{enc}",
-            f"{IOBROKER_HOST}/getPlainValue/{enc}",
-        ]:
-            raw = iob_fetch(url)
-            if raw is not None:
-                break
-
-        val, _  = extract_val(raw)
-        label   = (resolve_name(raw) if isinstance(raw, dict) else None) or state_id.split(".")[-1]
-        unit    =  resolve_unit(raw) if isinstance(raw, dict) else ""
-
-        dev_id = parent_id(state_id)
-        if dev_id not in dev_cache:
-            enc_dev = urllib.parse.quote(dev_id, safe="")
-            dev_raw = iob_fetch(f"{IOBROKER_HOST}/get/{enc_dev}") \
-                   or iob_fetch(f"{IOBROKER_HOST}/v1/object/{enc_dev}")
-            dev_cache[dev_id] = resolve_name(dev_raw) or dev_id
-
-        tiles.append({
-            "id":       state_id,
-            "dev_id":   dev_id,
-            "dev_name": dev_cache[dev_id],
-            "label":    label,
-            "val":      val,
-            "unit":     unit,
-        })
-
-    return tiles
+def fetch_all(groups):
+    result = []
+    for group in groups:
+        tiles = [fetch_state(sid) for sid in group["ids"]]
+        result.append({"label": group["label"], "tiles": tiles})
+    return result
 
 # ── HTML rendering ────────────────────────────────────────────────────────────
 
@@ -167,22 +161,11 @@ def fmt(v):
     if isinstance(v, int):   return f"{v:,}"
     return str(v)
 
-def render(tiles):
-    order, groups = [], {}
-    for t in tiles:
-        if t["dev_id"] not in groups:
-            groups[t["dev_id"]] = []
-            order.append(t["dev_id"])
-        groups[t["dev_id"]].append(t)
-
+def render(groups_data):
     cards = ""
-    for dev_id in order:
-        dt = groups[dev_id]
-        dn = dt[0]["dev_name"]
-        hdr = (f'<div class="dn">{esc(dn)}</div><div class="di">{esc(dev_id)}</div>'
-               if dn != dev_id else f'<div class="dn">{esc(dev_id)}</div>')
+    for group in groups_data:
         row = ""
-        for t in dt:
+        for t in group["tiles"]:
             v   = t["val"]
             cls = " on" if v is True else " off" if v is False else ""
             row += (f'<div class="tile">'
@@ -191,7 +174,7 @@ def render(tiles):
                     f'<div class="tf">{esc(t["unit"])}</div>'
                     f'</div>')
         cards += (f'<div class="card">'
-                  f'<div class="ch">{hdr}</div>'
+                  f'<div class="ch">{esc(group["label"])}</div>'
                   f'<div class="tr">{row}</div>'
                   f'</div>')
 
@@ -212,9 +195,7 @@ h1{{font-size:16px;font-weight:500;color:#888}}
 .ts{{font-size:11px;color:#bbb}}
 .devices{{display:flex;flex-direction:column;gap:16px}}
 .card{{background:#fff;border:0.5px solid rgba(0,0,0,.10);border-radius:12px;overflow:hidden}}
-.ch{{padding:10px 14px;border-bottom:0.5px solid rgba(0,0,0,.08);background:#f7f6f2}}
-.dn{{font-size:13px;font-weight:600}}
-.di{{font-size:10px;color:#bbb;margin-top:2px}}
+.ch{{padding:10px 14px;border-bottom:0.5px solid rgba(0,0,0,.08);background:#f7f6f2;font-size:13px;font-weight:600}}
 .tr{{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}
 .tile{{padding:12px 14px;border-right:0.5px solid rgba(0,0,0,.08)}}
 .tile:last-child{{border-right:none}}
@@ -225,8 +206,8 @@ h1{{font-size:16px;font-weight:500;color:#888}}
 @media(prefers-color-scheme:dark){{
   body{{background:#111;color:#efefef}}
   .card{{background:#1c1c1c;border-color:rgba(255,255,255,.09)}}
-  .ch{{background:#242424;border-color:rgba(255,255,255,.09)}}
-  .dn{{color:#efefef}}.tile{{border-color:rgba(255,255,255,.09)}}
+  .ch{{background:#242424;border-color:rgba(255,255,255,.09);color:#efefef}}
+  .tile{{border-color:rgba(255,255,255,.09)}}
   .tv{{color:#efefef}}.tv.on{{color:#4caf50}}.tv.off{{color:#e57373}}
 }}
 </style>
@@ -244,9 +225,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/", "/index.html"):
             self.send_response(404); self.end_headers(); return
         try:
-            STATES[:] = load_states()
-            tiles = fetch_all()
-            body  = render(tiles).encode()
+            groups = load_groups()
+            data   = fetch_all(groups)
+            body   = render(data).encode()
             self.send_response(200)
             self.send_header("Content-Type",   "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -261,6 +242,6 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"ioBroker: {IOBROKER_HOST}", flush=True)
-    print(f"States:   {STATES}", flush=True)
+    print(f"States file: {STATES_FILE}", flush=True)
     print(f"Listening on 0.0.0.0:{LISTEN_PORT}", flush=True)
-    HTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()   
+    HTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
