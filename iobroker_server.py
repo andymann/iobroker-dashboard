@@ -17,7 +17,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 IOBROKER_HOST = os.environ.get("IOBROKER_HOST", "http://192.168.178.53:8087").rstrip("/")
 
 _states_env = os.environ.get("IOBROKER_STATES", "")
-STATES = [s.strip().strip(",") for s in _states_env.split(",") if s.strip().strip(",")] or [
+# Split on commas, real newlines, or literal \n — strip whitespace and stray commas
+STATES = [s.strip().strip(",") for s in __import__("re").split(r'[,\n]+', _states_env.replace("\\n", "\n")) if s.strip().strip(",")] or [
     "zigbee.0.44e2f8fffe61d5d9.state",
     "zigbee.0.44e2f8fffe61d5d9.colortemp",
     "zigbee.0.8c65a3fffef115e2.state",
