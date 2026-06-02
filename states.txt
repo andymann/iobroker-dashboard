@@ -1,4 +1,3 @@
-States · TXT
 # ioBroker state IDs to display on the dashboard.
 # Lines starting with # are comments. Blank lines are ignored.
 # Use [Group Name] to start a named row — all IDs below it appear in one horizontal row.
