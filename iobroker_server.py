@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
 ioBroker dashboard web server
-Fetches live values from ioBroker simple-api on every request and serves HTML.
 Configure via environment variables:
-  IOBROKER_HOST   - e.g. http://192.168.178.53:8087
-  IOBROKER_STATES - comma-separated state IDs
-  LISTEN_PORT     - default 8080
-  FETCH_TIMEOUT   - default 5
+  IOBROKER_HOST, IOBROKER_STATES, LISTEN_PORT, FETCH_TIMEOUT
 """
 
 import urllib.request
@@ -16,22 +12,21 @@ import datetime
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# ── Config (env vars override defaults) ──────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 
 IOBROKER_HOST = os.environ.get("IOBROKER_HOST", "http://192.168.178.53:8087").rstrip("/")
 
-_default_states = [
+_states_env = os.environ.get("IOBROKER_STATES", "")
+STATES = [s.strip() for s in _states_env.split(",") if s.strip()] or [
     "zigbee.0.44e2f8fffe61d5d9.state",
     "zigbee.0.44e2f8fffe61d5d9.colortemp",
     "zigbee.0.8c65a3fffef115e2.state",
 ]
-_states_env = os.environ.get("IOBROKER_STATES", "")
-STATES = [s.strip() for s in _states_env.split(",") if s.strip()] or _default_states
 
-LISTEN_PORT   = int(os.environ.get("LISTEN_PORT", "8080"))
+LISTEN_PORT   = int(os.environ.get("LISTEN_PORT",   "8080"))
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "5"))
 
-# ── ioBroker helpers ──────────────────────────────────────────────────────────
+# ── ioBroker fetch ────────────────────────────────────────────────────────────
 
 def iob_fetch(url):
     try:
@@ -39,53 +34,88 @@ def iob_fetch(url):
             body = r.read().decode()
             ct = r.headers.get("Content-Type", "")
             return json.loads(body) if "json" in ct else body.strip()
-    except Exception:
+    except Exception as e:
+        print(f"  GET {url} → ERROR: {e}", flush=True)
         return None
 
 def extract_val(data):
-    if data is None:              return None, None
-    if isinstance(data, (bool, int, float)): return data, None
+    if data is None:
+        return None, None
+    if isinstance(data, bool):
+        return data, None
+    if isinstance(data, (int, float)):
+        return data, None
     if isinstance(data, str):
         t = data.strip()
         if t == "true":  return True,  None
         if t == "false": return False, None
         try: return (float(t) if "." in t else int(t)), None
-        except: return t or None, None
-    if isinstance(data, dict):
-        if "val" not in data and "value" not in data and len(data) == 1:
-            data = next(iter(data.values()))
-        if "val"   in data: return data["val"],   data.get("ts") or data.get("lc")
-        if "value" in data: return data["value"], data.get("ts") or data.get("lc")
+        except: return (t if t else None), None
+    if not isinstance(data, dict):
+        return None, None
+
+    # Unwrap single-key wrapper: {"zigbee.0.xxx": {...}}
+    if len(data) == 1 and not any(k in data for k in ("val", "value", "type", "common", "_id")):
+        data = next(iter(data.values()))
+        if not isinstance(data, dict):
+            return None, None
+
+    # Flat /get/ response: has "val" at top level alongside "type","common","_id"
+    if "val" in data:
+        return data["val"], data.get("ts") or data.get("lc")
+
+    # v1/state response: {"value": ..., "ts": ...}
+    if "value" in data:
+        return data["value"], data.get("ts") or data.get("lc")
+
+    # Nested: {"state": {"val": ...}}
+    if "state" in data and isinstance(data["state"], dict) and "val" in data["state"]:
+        return data["state"]["val"], data["state"].get("ts")
+
     return None, None
 
+
 def resolve_name(data):
-    if not isinstance(data, dict): return None
-    if "common" not in data and len(data) == 1:
-        data = next(iter(data.values()))
+    if not isinstance(data, dict):
+        return None
+    if len(data) == 1 and "common" not in data:
+        inner = next(iter(data.values()))
+        if isinstance(inner, dict):
+            data = inner
     n = (data.get("common") or {}).get("name")
-    if not n: return None
+    if not n:
+        return None
     if isinstance(n, str):  return n.strip() or None
     if isinstance(n, dict): return n.get("en") or n.get("de") or next(iter(n.values()), None)
     return None
 
+
 def resolve_unit(data):
-    if not isinstance(data, dict): return ""
-    if "common" not in data and len(data) == 1:
-        data = next(iter(data.values()))
+    if not isinstance(data, dict):
+        return ""
+    if len(data) == 1 and "common" not in data:
+        inner = next(iter(data.values()))
+        if isinstance(inner, dict):
+            data = inner
     return (data.get("common") or {}).get("unit", "") or ""
+
 
 def parent_id(sid):
     parts = sid.split(".")
     return ".".join(parts[:-1]) if len(parts) > 1 else sid
 
+
 def fetch_all():
     tiles, dev_cache = [], {}
+
     for state_id in STATES:
         enc = urllib.parse.quote(state_id, safe="")
         raw = None
-        for url in [f"{IOBROKER_HOST}/v1/state/{enc}",
-                    f"{IOBROKER_HOST}/get/{enc}",
-                    f"{IOBROKER_HOST}/getPlainValue/{enc}"]:
+        for url in [
+            f"{IOBROKER_HOST}/get/{enc}",
+            f"{IOBROKER_HOST}/v1/state/{enc}",
+            f"{IOBROKER_HOST}/getPlainValue/{enc}",
+        ]:
             raw = iob_fetch(url)
             if raw is not None:
                 break
@@ -93,16 +123,23 @@ def fetch_all():
         val, _  = extract_val(raw)
         label   = (resolve_name(raw) if isinstance(raw, dict) else None) or state_id.split(".")[-1]
         unit    =  resolve_unit(raw) if isinstance(raw, dict) else ""
-        dev_id  = parent_id(state_id)
 
+        dev_id = parent_id(state_id)
         if dev_id not in dev_cache:
             enc_dev = urllib.parse.quote(dev_id, safe="")
             dev_raw = iob_fetch(f"{IOBROKER_HOST}/get/{enc_dev}") \
                    or iob_fetch(f"{IOBROKER_HOST}/v1/object/{enc_dev}")
             dev_cache[dev_id] = resolve_name(dev_raw) or dev_id
 
-        tiles.append({"id": state_id, "dev_id": dev_id, "dev_name": dev_cache[dev_id],
-                      "label": label, "val": val, "unit": unit})
+        tiles.append({
+            "id":       state_id,
+            "dev_id":   dev_id,
+            "dev_name": dev_cache[dev_id],
+            "label":    label,
+            "val":      val,
+            "unit":     unit,
+        })
+
     return tiles
 
 # ── HTML rendering ────────────────────────────────────────────────────────────
@@ -141,7 +178,10 @@ def render(tiles):
                     f'<div class="tv{cls}">{esc(fmt(v))}</div>'
                     f'<div class="tf">{esc(t["unit"])}</div>'
                     f'</div>')
-        cards += f'<div class="card"><div class="ch">{hdr}</div><div class="tr">{row}</div></div>'
+        cards += (f'<div class="card">'
+                  f'<div class="ch">{hdr}</div>'
+                  f'<div class="tr">{row}</div>'
+                  f'</div>')
 
     now = datetime.datetime.now().strftime("%H:%M:%S")
 
@@ -192,7 +232,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/", "/index.html"):
             self.send_response(404); self.end_headers(); return
         try:
-            body = render(fetch_all()).encode()
+            tiles = fetch_all()
+            body  = render(tiles).encode()
             self.send_response(200)
             self.send_header("Content-Type",   "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -206,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {fmt % args}", flush=True)
 
 if __name__ == "__main__":
-    print(f"ioBroker: {IOBROKER_HOST}")
-    print(f"States:   {STATES}")
-    print(f"Listening on 0.0.0.0:{LISTEN_PORT}")
+    print(f"ioBroker: {IOBROKER_HOST}", flush=True)
+    print(f"States:   {STATES}", flush=True)
+    print(f"Listening on 0.0.0.0:{LISTEN_PORT}", flush=True)
     HTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
