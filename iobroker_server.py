@@ -16,13 +16,24 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 IOBROKER_HOST = os.environ.get("IOBROKER_HOST", "http://192.168.178.53:8087").rstrip("/")
 
-_states_env = os.environ.get("IOBROKER_STATES", "")
-# Split on commas, real newlines, or literal \n — strip whitespace and stray commas
-STATES = [s.strip().strip(",") for s in __import__("re").split(r'[,\n]+', _states_env.replace("\\n", "\n")) if s.strip().strip(",")] or [
-    "zigbee.0.44e2f8fffe61d5d9.state",
-    "zigbee.0.44e2f8fffe61d5d9.colortemp",
-    "zigbee.0.8c65a3fffef115e2.state",
-]
+STATES_FILE = os.environ.get("STATES_FILE", "/app/states.txt")
+
+def load_states():
+    try:
+        with open(STATES_FILE) as f:
+            return [
+                line.strip() for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+    except FileNotFoundError:
+        print(f"WARNING: {STATES_FILE} not found, using defaults", flush=True)
+        return [
+            "zigbee.0.44e2f8fffe61d5d9.state",
+            "zigbee.0.44e2f8fffe61d5d9.colortemp",
+            "zigbee.0.8c65a3fffef115e2.state",
+        ]
+
+STATES = load_states()
 
 LISTEN_PORT   = int(os.environ.get("LISTEN_PORT",   "8080"))
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "5"))
@@ -233,6 +244,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/", "/index.html"):
             self.send_response(404); self.end_headers(); return
         try:
+            STATES[:] = load_states()
             tiles = fetch_all()
             body  = render(tiles).encode()
             self.send_response(200)

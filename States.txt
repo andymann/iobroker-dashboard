@@ -1,0 +1,13 @@
+# ioBroker state IDs to display on the dashboard.
+# One ID per line. Lines starting with # are comments. Blank lines are ignored.
+
+# Flur unten
+zigbee.0.44e2f8fffe61d5d9.state
+zigbee.0.44e2f8fffe61d5d9.colortemp
+zigbee.0.8c65a3fffef115e2.state
+zigbee.0.8c65a3fffef115e2.colortemp
+
+ #Bad
+ zigbee.0.001788010c5a5991.state
+ zigbee.0.001788010c5a5991.color
+ 
