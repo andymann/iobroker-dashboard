@@ -16,7 +16,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 IOBROKER_HOST = os.environ.get("IOBROKER_HOST", "http://192.168.178.53:8087").rstrip("/")
 
-STATES_FILE = os.environ.get("STATES_FILE", "/app/states.txt")
+STATES_FILE = os.environ.get("STATES_FILE", "/config/states.txt")
 
 def load_states():
     try:
@@ -263,4 +263,4 @@ if __name__ == "__main__":
     print(f"ioBroker: {IOBROKER_HOST}", flush=True)
     print(f"States:   {STATES}", flush=True)
     print(f"Listening on 0.0.0.0:{LISTEN_PORT}", flush=True)
-    HTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
+    HTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()   
