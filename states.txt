@@ -27,3 +27,6 @@ zigbee.0.943469fffe4b2949.colortemp
 zigbee.0.b43522fffeeebe65.state
 zigbee.0.b43522fffeeebc4c.state
 
+[PV Batterie]
+sonnen.0.status.relativeSoc
+sonnen.0.status.userSoc
