@@ -28,5 +28,8 @@ zigbee.0.b43522fffeeebe65.state
 zigbee.0.b43522fffeeebc4c.state
 
 [PV Batterie]
-sonnen.0.status.relativeSoc
+#sonnen.0.status.relativeSoc
 sonnen.0.status.userSoc
+
+[Aussenlicht]
+zigbee.0.70ac08fffec4070a.state
